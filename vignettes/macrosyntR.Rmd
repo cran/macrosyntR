@@ -1,0 +1,304 @@
+---
+title: "macrosyntR"
+author: "Sami El Hilali"
+date: "2022/11/09"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{macrosyntR}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+
+An R package for evaluation of pair-wise synteny conservation at the genome-wide scale. It takes a table of orthologs and genome annotation files formatted as BED to automatically infer significantly conserved linkage groups, and order them on an oxford grid.
+
+# Overview :
+
+It has 5 functions :   
+
+
+|     Function          |         description                                                                                          | 
+|-----------------------|--------------------------------------------------------------------------------------------------------------|
+| load_orthologs()         | integrates genomic coordinates (bedfiles) of the orthologs of the two species to compare                     |
+| compute_macrosynteny() | compares all the chromosomes to each other and identifies the significantly conserved linkage groups   |
+| reorder_macrosynteny()     | takes an mbh_df (from load_orthologs()) and outputs an mbh_df with chromosome levels reordered by cluster and amount of orthologs (run alone or by setting plot_oxford_grid(...,auto_order_clusters = TRUE) )|
+| plot_macrosynteny()      | draws a dotplot displaying the significant linkage groups with their relative amount of orthologs      |
+| plot_oxford_grid()    | draws an oxford grid from an orthologs_df (output of either load_orthologs() or reorder_macrosynteny()                  |    
+
+# Step-by-step tutorial :
+
+We demonstrate the usage of the package using a subset of publicly available data.   
+
+* Branchiostoma floridae (Simakov et al. 2020)   
+data download : https://www.ncbi.nlm.nih.gov/genome/?term=txid7739)   
+
+* Paraescarpia echinospica (Sun et al. 2021)   
+(data download : https://doi.org/10.6084/m9.figshare.15050478.v1)
+
+### 1 - Pre-process and Load the data :
+
+#### Foreword :
+
+This package doesn't compute the orthologs. I recommend to compute it as reciprocal best hits using [rbhxpress](https://github.com/SamiLhll/rbhXpress). It is fast and accurate as it uses diamond blast.   
+
+Drawing the plots using this package require to have the following data :   
+
+* A two columns table of orthologs (reciprocal best hits). Each gene must appear only once in the table.   
+* genomic coordinates on species 1 for each gene having an ortholog.   
+* genomic coordinates on species 2 for each gene having an ortholog.   
+
+
+let's say I have the following orthologs :  
+
+```{bash, eval = FALSE}
+sp1.gene.x1  sp2.gene.y1   
+sp1.gene.X2  sp2.gene.y2   
+...   
+sp1.gene.xn  sp2.gene.yn   
+```
+
+then, the genomic coordinates files must look like (BED format) :   
+
+* species1 :
+```{bash, eval = FALSE}
+chr4    200    600    sp1.gene.x1   
+chr8     10    400    sp1.gene.x2   
+...   
+chr12   900    980    sp1.gene.xn   
+```
+
+* species2 :
+```{bash, eval = FALSE}
+chr1    100    200    sp2.gene.y1   
+chr6     50    200    sp2.gene.y2   
+...   
+chr8   300    480    sp2.gene.yn   
+```
+
+
+#### Example :
+
+I'm going to show usage of this package by comparing the data of the lancelet Branchiostoma floridae ([Simakov et al. 2020](https://doi.org/10.1038/s41559-020-1156-z)) with the data of the vestimentifera (giant tubeworm) Paraescarpia echinospica ([Sun et al. 2021](https://doi.org/10.1093/molbev/msab203)).      
+
+Download the sequences of proteins (fasta format) and their genomic coordinates :    
+
+ - B.floridae : 
+ The data are available on ncbi at https://www.ncbi.nlm.nih.gov/genome/?term=txid7739   
+ get the protein sequences at  by clicking the "Download sequences in FASTA format for protein".   
+ get the genomic coordinates by clicking "Download genome annotation in tabular format" and further click download as csv.   
+ 
+ - P.echinospica :   
+ The data are available on figshare under the doi : [10.6084/m9.figshare.15050478](https://doi.org/10.6084/m9.figshare.15050478) 
+ 
+ 
+ Compute the reciprocal best hits of the fasta sequences. Using [rbhXpress](https://github.com/SamiLhll/rbhXpress) you can achieve it by typing the following in your terminal :   
+ 
+```{bash,eval = FALSE}
+ # In the terminal :
+ # call mbhXpress with using 6 threads :
+ bash mbhXpress -a GCF_000003815.2_Bfl_VNyyK_protein.faa -b Pec_ragoo_v1.0.pep.fasta -o Bflo_vs_Pech.tab -t 6
+ 
+```
+ 
+To convert the genome annotation to the [bed file format](https://www.ensembl.org/info/website/upload/bed.html), I'm using the following command lines (if unfamiliar with this you can use a spreadsheet software). The concept is to keep the chrom, chromStart, chromEnd mandatory fields plus the name optional field that links the genomic region with the protein product :   
+ 
+```{bash, eval = FALSE}
+ # In the terminal :
+ # B.floridae CSV file to bed
+tail -n +2 proteins_75_971579.csv | cut -d "," -f1,3,4,9  | \
+sed -e 's/\"//g' -e 's/,/\t/g' -e 's/chromosome /BFL/g' > Bflo.protein_products.bed
+
+ # P.echinospica gff file to bed
+fgrep "gene" Pec_genes.ragoo_v1.0.gff | cut -f1,4,5,9 | cut -d ";" -f 1 | \
+fgrep "Superscaffold" | sed -e 's/ID=//g' -e 's/Superscaffold/PEC/g' > Pech.protein_products.bed
+
+```
+
+**Please note that I generated a subset of these datasets, and kept only 2500 ortholog pairs to lower the compilation time**.
+
+Now the data are ready to be loaded into R using macrosyntR :
+
+```{r setup}
+library(macrosyntR)
+```
+
+```{r}
+my_orthologs_table <- load_orthologs(orthologs_table = system.file("extdata","Bflo_vs_Pech.tab",package="macrosyntR"),
+                                     sp1_bed = system.file("extdata","Bflo.protein_products.bed",package="macrosyntR"),
+                                     sp2_bed = system.file("extdata","Pech.protein_products.bed",package="macrosyntR"))
+
+head(my_orthologs_table)
+
+```
+
+### 2 - Compute linkage groups and plot :
+
+Let's compute the pairs of chromosomes that have a significant amount of orthologs using compute_macrosynteny().
+We can visualize the results on a dot plot using plot_macrosnyteny() and see the distributions of orthologs on an oxford grid using plot_oxford_grid()
+
+```{r}
+
+# compute significance :
+macrosynteny_df <- compute_macrosynteny(my_orthologs_table)
+head(macrosynteny_df)
+
+```
+
+
+```{r,eval = FALSE}
+
+# visualize the loaded data on a oxford grid :
+plot_oxford_grid(my_orthologs_table,
+                 sp1_label = "B.floridae",
+                 sp2_label = "P.echinospica")
+
+# Visualize the results of the test of significance :
+plot_macrosynteny(macrosynteny_df,
+                  sp1_label = "B.floridae",
+                  sp2_label = "P.echinospica")
+
+```
+
+```{r,echo = FALSE,out.width = c('300px','300px')}
+
+# visualize the loaded data on a oxford grid :
+plot_oxford_grid(my_orthologs_table,
+                 sp1_label = "B.floridae",
+                 sp2_label = "P.echinospica")
+
+# Visualize the results of the test of significance :
+plot_macrosynteny(macrosynteny_df,
+                  sp1_label = "B.floridae",
+                  sp2_label = "P.echinospica")
+
+```
+
+### 3 - Reorder chromosome levels to group the linkage groups in clusters :
+
+#### 3.1 - Automatic reordering using a network-based greedy algorithm :
+
+Reordering the chromosomes using a network based greedy algorithm can be performed by calling the function reorder_macrosynteny.
+It returns an orthologs_df with reordered levels in sp1.Chr and sp2.Chr. These columns are factors where the levels determine the plotting order.
+You'll see the results of the clustering, when drawing the oxford grid of this newly generated orthologs data.frame
+
+```{r,eval = FALSE}
+
+# visualize the loaded data on a oxford grid :
+my_orthologs_table_reordered <- reorder_macrosynteny(my_orthologs_table)
+plot_oxford_grid(my_orthologs_table_reordered,
+                 sp1_label = "B.floridae",
+                 sp2_label = "P.echinospica")
+
+# compute significance and visualize on a dotplot :
+macrosynteny_df_reordered <- compute_macrosynteny(my_orthologs_table_reordered)
+plot_macrosynteny(macrosynteny_df_reordered,
+                  sp1_label = "B.floridae",
+                  sp2_label = "P.echinospica")
+
+```
+
+```{r,echo = FALSE}
+# visualize the loaded data on a oxford grid :
+my_orthologs_table_reordered <- reorder_macrosynteny(my_orthologs_table)
+plot_oxford_grid(my_orthologs_table_reordered,
+                 sp1_label = "B.floridae",
+                 sp2_label = "P.echinospica")
+# compute significance and visualize on a dotplot :
+macrosynteny_df_reordered <- compute_macrosynteny(my_orthologs_table_reordered)
+plot_macrosynteny(macrosynteny_df_reordered,
+                  sp1_label = "B.floridae",
+                  sp2_label = "P.echinospica")
+
+```
+
+#### 3.2 - Manually reorder/subset the Chromosomes :
+
+If you would like to subset some chromosomes of interest and manually reorder them you can still take advantage of functions implemented to handle data.frames.
+This task is out of the scope of this package, and can achieved using base R :
+
+```{r,eval = FALSE}
+# select only the orthologs falling in the chromosomes of interest and plot: 
+subset_of_orthologs <- subset(my_orthologs_table, sp1.Chr %in% c("BFL13","BFL15","BFL2","BFL3") & sp2.Chr %in% c("PEC2","PEC5","PEC11"))
+
+plot_oxford_grid(subset_of_orthologs,
+                 sp1_label = "B.floridae",
+                 sp2_label = "P.echinospica")
+
+# reorder :
+subset_of_orthologs$sp2.Chr <- factor(subset_of_orthologs$sp2.Chr,levels = c("PEC5","PEC11","PEC2"))
+plot_oxford_grid(subset_of_orthologs,
+                 sp1_label = "B.floridae",
+                 sp2_label = "P.echinospica")
+
+# Compute and plot macrosynteny :
+macrosynteny_of_subset <- compute_macrosynteny(subset_of_orthologs)
+plot_macrosynteny(macrosynteny_of_subset,
+                 sp1_label = "B.floridae",
+                 sp2_label = "P.echinospica")
+
+```
+
+```{r,echo = FALSE,out.width = c('300px','300px')}
+# select only the orthologs falling in the chromosomes of interest and plot: 
+subset_of_orthologs <- subset(my_orthologs_table, sp1.Chr %in% c("BFL13","BFL15","BFL2","BFL3") & sp2.Chr %in% c("PEC2","PEC5","PEC11"))
+
+plot_oxford_grid(subset_of_orthologs,
+                 sp1_label = "B.floridae",
+                 sp2_label = "P.echinospica")
+
+# reorder :
+subset_of_orthologs$sp2.Chr <- factor(subset_of_orthologs$sp2.Chr,levels = c("PEC5","PEC11","PEC2"))
+plot_oxford_grid(subset_of_orthologs,
+                 sp1_label = "B.floridae",
+                 sp2_label = "P.echinospica")
+
+
+```
+
+
+### 4 - Plot directly with reordering the linkage groups and coloring  :
+
+The reordering can be performed on the row when calling plot_oxford_grid() by setting the reorder argument to TRUE.
+
+```{r,eval = FALSE}
+
+# visualize the loaded data on a oxford grid  with reordering and coloring by cluster :
+plot_oxford_grid(my_orthologs_table,
+                 sp1_label = "B.floridae",
+                 sp2_label = "P.echinospica",
+                 reorder = TRUE,
+                 color_by = "clust")
+
+# redo and color by sp1.Chr instead :
+plot_oxford_grid(my_orthologs_table,
+                 sp1_label = "B.floridae",
+                 sp2_label = "P.echinospica",
+                 reorder = TRUE,
+                 color_by = "sp1.Chr")
+
+```
+
+```{r,echo = FALSE,out.width = c('300px','300px')}
+
+# visualize the loaded data on a oxford grid  with reordering and coloring by cluster :
+plot_oxford_grid(my_orthologs_table,
+                 sp1_label = "B.floridae",
+                 sp2_label = "P.echinospica",
+                 reorder = TRUE,
+                 color_by = "clust")
+
+# redo and color by sp2.Chr instead :
+plot_oxford_grid(my_orthologs_table,
+                 sp1_label = "B.floridae",
+                 sp2_label = "P.echinospica",
+                 reorder = TRUE,
+                 color_by = "sp2.Chr")
+
+```
