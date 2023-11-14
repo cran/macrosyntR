@@ -1,4 +1,31 @@
-# macrosyntR 0.2.18
+# macrosyntR 0.3.3
+
+### Enhancements : 
+
+* removed dependency on ggthemes package that is scheduled for archival.
+
+# macrosyntR 0.3.1
+
+### New features :
+
+
+* Two species and more can now be visualized on a chord diagram using the function plot_chord_diagram()
+
+
+### Enhancements :
+
+* Redundant chromosome names from one species to another are now accepted   
+
+* load_orthologs now handles more than two species. It uses the argument 'bedfiles' instead of sp1_bed and sp2_bed which are still working when used together. 
+
+# macrosyntR 0.2.21
+
+### Enhancements :
+
+* added control when chromosome names are redundant in the 'orthologs_df' provided to 'reorder_macrosynteny()'.
+It now raises an error with explanations about what's wrong.
+
+# macrosyntR 0.2.19
 
 ### New features :
 
